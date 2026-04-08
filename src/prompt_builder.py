@@ -24,7 +24,7 @@ def build_schema_section(relevant_tables: dict) -> str:
     lines = []
     for table_name, meta in relevant_tables.items():
         cols = ", ".join(
-            f"{c['name']} ({c['type']})" for c in meta["columns"]
+            f"{c['name']} ({c['type']}{'  ← ISO date YYYY-MM-DD, use strftime' if _is_date_col(c['name']) else ''})" for c in meta["columns"]
         )
         lines.append(f"TABLE: {table_name}")
         lines.append(f"  Columns: {cols}")
@@ -71,6 +71,9 @@ def build_messages(
     messages.append({"role": "user", "content": question})
     return messages
 
+def _is_date_col(name: str) -> bool:
+    keywords = {"date", "dob", "birth", "start", "exit", "hired", "created", "updated"}
+    return any(k in name.lower() for k in keywords)
 
 def _indent(text: str, spaces: int) -> str:
     pad = " " * spaces

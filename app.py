@@ -9,6 +9,7 @@ from src.retriever import build_schema_embeddings, retrieve_relevant_tables
 from src.prompt_builder import build_messages
 from src.summarizer import maybe_summarize
 from src.executor import execute_with_retry
+from src.logger import log_prompt
 from src.llm import get_groq_client, GROQ_MODEL
 
 load_dotenv()
@@ -16,7 +17,6 @@ load_dotenv()
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="CSV - SQL Assistant",
-    page_icon="🗃️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -32,23 +32,10 @@ html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
 }
 
-/* Background */
-.stApp {
-    background-color: #0f1117;
-    color: #e2e8f0;
-}
-
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background-color: #0a0d13;
     border-right: 1px solid #1e2535;
 }
-[data-testid="stSidebar"] * {
-    color: #cbd5e1 !important;
-}
-
-/* Hide default header */
-header[data-testid="stHeader"] { display: none; }
 
 /* Custom top bar */
 .top-bar {
@@ -63,14 +50,14 @@ header[data-testid="stHeader"] { display: none; }
     font-family: 'IBM Plex Mono', monospace;
     font-size: 1.3rem;
     font-weight: 500;
-    color: #7dd3fc;
+    color: #475569;
     margin: 0;
     letter-spacing: -0.02em;
 }
 .top-bar .badge {
-    background: #0ea5e920;
-    border: 1px solid #0ea5e940;
-    color: #7dd3fc;
+    background: #f1f5f9;
+    border: 1px solid #f1f5f9;
+    color: #475569;
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.65rem;
     padding: 2px 8px;
@@ -183,7 +170,7 @@ header[data-testid="stHeader"] { display: none; }
     font-size: 0.83rem;
 }
 .table-chip .tmeta {
-    color: #475569;
+    color: #94a3b8;
     font-size: 0.75rem;
     margin-top: 2px;
 }
@@ -210,7 +197,6 @@ header[data-testid="stHeader"] { display: none; }
 
 /* Input area */
 .stChatInput > div {
-    background: #0a0d13 !important;
     border: 1px solid #1e2535 !important;
     border-radius: 12px !important;
 }
@@ -317,7 +303,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="section-label" style="margin-top:20px;">Upload CSVs</div>', unsafe_allow_html=True)
+    st.markdown('<div style="margin-top:20px;">Upload CSVs</div>', unsafe_allow_html=True)
     uploaded_files = st.file_uploader(
         "Upload CSV files",
         type=["csv"],
@@ -375,7 +361,7 @@ with st.sidebar:
 # Main area
 st.markdown(
     """<div class="top-bar">
-        <h1>🗃️ CSV - SQL Assistant</h1>
+        <h1>🗃️ CSV based Text - SQL Assistant</h1>
         <span class="badge">Groq · LLaMA 3.3</span>
     </div>""",
     unsafe_allow_html=True,
@@ -405,7 +391,12 @@ with chat_container:
                 st.markdown('<div class="chat-assistant"><div class="chat-assistant-content">', unsafe_allow_html=True)
 
                 # SQL block
-                retry_badge = '<span class="retry-badge">RETRIED</span>' if res.get("retried") else ""
+                if res.get("retried"):
+                    retry_badge = '<span class="retry-badge">SQL ERROR · RETRIED</span>'
+                elif res.get("empty_retried"):
+                    retry_badge = '<span class="retry-badge">EMPTY RESULT · RETRIED</span>'
+                else:
+                    retry_badge = ""
                 st.markdown(
                     f'<div class="sql-header"><span class="sql-label">Generated SQL</span>{retry_badge}</div>',
                     unsafe_allow_html=True,
@@ -486,11 +477,34 @@ if question:
             st.session_state.conn,
         )
 
-    # Update LLM chat history (plain text only, no DataFrames)
+    # Update LLM chat history — store rich context so follow-ups resolve correctly
     st.session_state.chat_history.append({"role": "user", "content": question})
-    assistant_summary = result["sql"] if result["sql"] else result.get("error", "")
+
+    if result.get("error"):
+        assistant_turn = f"SQL attempted:\n{result['sql']}\nError: {result['error']}"
+    else:
+        sql_part = f"SQL:\n{result['sql']}"
+        result_part = ""
+        if result.get("df") is not None and len(result["df"]) > 0:
+            # Snapshot: up to 5 rows as plain text so LLM can reference actual values
+            snapshot = result["df"].head(5).to_string(index=False)
+            total = result["total_rows"]
+            result_part = f"\nResult ({total} rows total, showing first 5):\n{snapshot}"
+        elif result.get("df") is not None:
+            result_part = "\nResult: query returned 0 rows."
+        assistant_turn = sql_part + result_part
+
     st.session_state.chat_history.append(
-        {"role": "assistant", "content": f"SQL: {assistant_summary}"}
+        {"role": "assistant", "content": assistant_turn}
+    )
+
+    # Prompt logs
+    log_prompt(
+    question=question,
+    messages=messages,
+    sql=result.get("sql", ""),
+    explanation=result.get("explanation", ""),
+    error=result.get("error"),
     )
 
     # Add to display
